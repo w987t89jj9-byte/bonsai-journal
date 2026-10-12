@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signed() { return request.auth != null; }
+  function member(fid) { return signed() && exists(/databases/$(database)/documents/families/$(fid)/members/$(request.auth.uid)); }
+  function admin(fid) { return member(fid) && get(/databases/$(database)/documents/families/$(fid)/members/$(request.auth.uid)).data.role == 'admin'; }
+  match /users/{uid} {
+   allow read: if signed() && request.auth.uid == uid;
+   allow create: if signed() && request.auth.uid == uid && request.resource.data.keys().hasOnly(['familyId','role']) && request.resource.data.role in ['admin','member'] && member(request.resource.data.familyId) && get(/databases/$(database)/documents/families/$(request.resource.data.familyId)/members/$(uid)).data.role == request.resource.data.role;
+   allow update,delete: if false;
+  }
+  match /families/{fid} {
+   allow create: if signed() && request.resource.data.ownerUid == request.auth.uid && request.resource.data.keys().hasOnly(['name','ownerUid','createdAt']);
+   allow read: if member(fid);
+   allow update,delete: if false;
+   match /members/{uid} {
+    allow read: if member(fid);
+    allow create: if signed() && uid == request.auth.uid && request.resource.data.uid == uid && request.resource.data.keys().hasOnly(['uid','name','email','role','inviteCode','joinedAt']) && (
+      (request.resource.data.role == 'admin' && get(/databases/$(database)/documents/families/$(fid)).data.ownerUid == uid) ||
+      (request.resource.data.role == 'member' && request.resource.data.inviteCode is string && exists(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)) && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.familyId == fid && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.email == request.auth.token.email && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.expiresAt > request.time)
+    );
+    allow update,delete: if false;
+   }
+   match /plants/{pid} {
+    allow read: if member(fid);
+    allow create: if member(fid) && request.resource.data.keys().hasOnly(['name','species','location','acquired','soil','notes','createdBy','createdAt']) && request.resource.data.createdBy == request.auth.uid;
+    allow update: if member(fid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','species','location','acquired','soil','notes','photoUrl']);
+    allow delete: if admin(fid);
+   }
+   match /logs/{lid} {
+    allow read: if member(fid);
+    allow create: if member(fid) && request.resource.data.keys().hasOnly(['plantId','action','when','notes','byUid','byName','createdAt']) && request.resource.data.byUid == request.auth.uid;
+    allow update,delete: if false;
+   }
+   match /photos/{photoId} {
+    allow read: if member(fid);
+    allow create: if member(fid) && request.resource.data.keys().hasOnly(['plantId','url','path','caption','uploadedBy','createdAt']) && request.resource.data.uploadedBy == request.auth.uid;
+    allow update,delete: if false;
+   }
+  }
+  match /invites/{code} {
+   allow get: if signed() && resource.data.email == request.auth.token.email && resource.data.expiresAt > request.time;
+   allow list: if false;
+   allow create: if signed() && admin(request.resource.data.familyId) && request.resource.data.keys().hasOnly(['familyId','email','createdBy','expiresAt','createdAt']) && request.resource.data.createdBy == request.auth.uid;
+   allow update,delete: if false;
+  }
+ }
+}
